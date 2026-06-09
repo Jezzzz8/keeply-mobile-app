@@ -1,16 +1,12 @@
-// src/database/DatabaseService.ts
+import * as FileSystem from 'expo-file-system';
 import * as SQLite from 'expo-sqlite';
 import { Note, NoteImage } from '../types';
-
-type NoteRow = Omit<Note, 'tags' | 'isVault' | 'images'> & {
-  tags: string;
-  isVault: number;
-};
 
 const db = SQLite.openDatabaseSync('keeply.db');
 
 export class DatabaseService {
   static async init(): Promise<void> {
+    // Create tables and indexes
     await db.execAsync(`
       CREATE TABLE IF NOT EXISTS notes (
         id TEXT PRIMARY KEY,
@@ -20,7 +16,7 @@ export class DatabaseService {
         url TEXT,
         domain TEXT,
         description TEXT,
-        previewImageId TEXT,
+        previewImageUri TEXT,
         tags TEXT,
         category TEXT,
         priority TEXT,
@@ -29,55 +25,53 @@ export class DatabaseService {
         updatedAt INTEGER,
         accessedAt INTEGER
       );
-    `);
-
-    await db.execAsync(`
       CREATE TABLE IF NOT EXISTS note_images (
         id TEXT PRIMARY KEY,
         noteId TEXT,
-        data TEXT,
+        uri TEXT,
         mime TEXT,
         filename TEXT,
         "order" INTEGER,
         createdAt INTEGER,
         FOREIGN KEY (noteId) REFERENCES notes(id) ON DELETE CASCADE
       );
+      CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updatedAt);
+      CREATE INDEX IF NOT EXISTS idx_notes_type ON notes(type);
+      CREATE INDEX IF NOT EXISTS idx_notes_vault ON notes(isVault);
+      CREATE INDEX IF NOT EXISTS idx_images_note ON note_images(noteId);
     `);
 
-    await db.execAsync(`CREATE INDEX IF NOT EXISTS idx_notes_type ON notes(type);`);
-    await db.execAsync(`CREATE INDEX IF NOT EXISTS idx_images_note ON note_images(noteId);`);
+    // Add new columns one by one, ignoring errors if they already exist
+    try {
+      await db.execAsync(`ALTER TABLE notes ADD COLUMN favorite INTEGER DEFAULT 0;`);
+    } catch (e) {
+      // Column already exists – ignore
+    }
+    try {
+      await db.execAsync(`ALTER TABLE notes ADD COLUMN thumbnail TEXT;`);
+    } catch (e) {
+      // Column already exists – ignore
+    }
   }
 
   static async insertNote(note: Note, images?: Omit<NoteImage, 'id' | 'createdAt'>[]): Promise<void> {
     await db.runAsync(
-      `INSERT INTO notes (id, title, content, type, url, domain, description, previewImageId, tags, category, priority, isVault, createdAt, updatedAt, accessedAt)
+      `INSERT INTO notes (id, title, content, type, url, domain, description, previewImageUri, tags, category, priority, isVault, createdAt, updatedAt, accessedAt)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
-        note.id,
-        note.title,
-        note.content,
-        note.type,
-        note.url || null,
-        note.domain || null,
-        note.description || null,
-        note.previewImageId || null,
-        JSON.stringify(note.tags),
-        note.category,
-        note.priority,
-        note.isVault ? 1 : 0,
-        note.createdAt,
-        note.updatedAt,
-        note.accessedAt,
+        note.id, note.title, note.content, note.type, note.url || null,
+        note.domain || null, note.description || null, note.previewImageUri || null,
+        JSON.stringify(note.tags), note.category, note.priority,
+        note.isVault ? 1 : 0, note.createdAt, note.updatedAt, note.accessedAt
       ]
     );
-
-    if (images && images.length) {
+    if (images?.length) {
       for (const img of images) {
-        const imageId = `${img.noteId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const imageId = `${img.noteId}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
         await db.runAsync(
-          `INSERT INTO note_images (id, noteId, data, mime, filename, "order", createdAt)
+          `INSERT INTO note_images (id, noteId, uri, mime, filename, "order", createdAt)
            VALUES (?,?,?,?,?,?,?)`,
-          [imageId, img.noteId, img.data, img.mime, img.filename || null, img.order, Date.now()]
+          [imageId, img.noteId, img.uri, img.mime, img.filename || null, img.order, Date.now()]
         );
       }
     }
@@ -85,20 +79,10 @@ export class DatabaseService {
 
   static async updateNote(note: Note): Promise<void> {
     await db.runAsync(
-      `UPDATE notes SET title=?, content=?, tags=?, category=?, priority=?, updatedAt=?, accessedAt=?, description=?, previewImageId=?
+      `UPDATE notes SET title=?, content=?, tags=?, category=?, priority=?, updatedAt=?, accessedAt=?, description=?, previewImageUri=?
        WHERE id=?`,
-      [
-        note.title,
-        note.content,
-        JSON.stringify(note.tags),
-        note.category,
-        note.priority,
-        note.updatedAt,
-        note.accessedAt,
-        note.description || null,
-        note.previewImageId || null,
-        note.id,
-      ]
+      [note.title, note.content, JSON.stringify(note.tags), note.category, note.priority,
+       note.updatedAt, note.accessedAt, note.description || null, note.previewImageUri || null, note.id]
     );
   }
 
@@ -107,75 +91,101 @@ export class DatabaseService {
   }
 
   static async getAllNotes(): Promise<Note[]> {
-    const rows = await db.getAllAsync<NoteRow>(`SELECT * FROM notes ORDER BY updatedAt DESC`);
-    const notes: Note[] = rows.map((row: NoteRow) => ({
+    const rows = await db.getAllAsync<any>(`SELECT * FROM notes ORDER BY updatedAt DESC`);
+    const notes = rows.map(row => ({
       ...row,
       tags: JSON.parse(row.tags),
       isVault: row.isVault === 1,
       images: []
     }));
-    for (const note of notes) {
-      note.images = await this.getImagesForNote(note.id);
+    // batch load images
+    const noteIds = notes.map(n => n.id);
+    if (noteIds.length) {
+      const images = await db.getAllAsync<NoteImage>(
+        `SELECT * FROM note_images WHERE noteId IN (${noteIds.map(() => '?').join(',')}) ORDER BY "order" ASC`,
+        noteIds
+      );
+      for (const note of notes) {
+        note.images = images.filter(img => img.noteId === note.id);
+      }
     }
     return notes;
   }
 
   static async searchNotes(query: string): Promise<Note[]> {
-    const rows = await db.getAllAsync<NoteRow>(
+    const rows = await db.getAllAsync<any>(
       `SELECT * FROM notes WHERE title LIKE ? OR content LIKE ? OR tags LIKE ? ORDER BY updatedAt DESC`,
       [`%${query}%`, `%${query}%`, `%${query}%`]
     );
-    const notes: Note[] = rows.map((row: NoteRow) => ({
+    const notes = rows.map(row => ({
       ...row,
       tags: JSON.parse(row.tags),
       isVault: row.isVault === 1,
       images: []
     }));
-    for (const note of notes) {
-      note.images = await this.getImagesForNote(note.id);
+    // batch load images for search results
+    const noteIds = notes.map(n => n.id);
+    if (noteIds.length) {
+      const images = await db.getAllAsync<NoteImage>(
+        `SELECT * FROM note_images WHERE noteId IN (${noteIds.map(() => '?').join(',')}) ORDER BY "order" ASC`,
+        noteIds
+      );
+      for (const note of notes) {
+        note.images = images.filter(img => img.noteId === note.id);
+      }
     }
     return notes;
   }
 
-  static getImagesForNote(noteId: string): Promise<NoteImage[]> {
-    return db.getAllAsync<NoteImage>(
-      `SELECT * FROM note_images WHERE noteId = ? ORDER BY "order" ASC`,
-      [noteId]
-    );
-  }
-
   static async addImageToNote(image: Omit<NoteImage, 'createdAt'>): Promise<void> {
     await db.runAsync(
-      `INSERT INTO note_images (id, noteId, data, mime, filename, "order", createdAt)
+      `INSERT INTO note_images (id, noteId, uri, mime, filename, "order", createdAt)
        VALUES (?,?,?,?,?,?,?)`,
-      [image.id, image.noteId, image.data, image.mime, image.filename || null, image.order, Date.now()]
+      [image.id, image.noteId, image.uri, image.mime, image.filename || null, image.order, Date.now()]
     );
   }
 
   static async deleteImage(imageId: string): Promise<void> {
+    const img = await db.getFirstAsync<NoteImage>(`SELECT uri FROM note_images WHERE id=?`, [imageId]);
+    if (img?.uri) {
+      try {
+        await FileSystem.deleteAsync(img.uri);
+      } catch (e) {}
+    }
     await db.runAsync(`DELETE FROM note_images WHERE id=?`, [imageId]);
   }
 
   static async getVaultNotes(): Promise<Note[]> {
-    const rows = await db.getAllAsync<NoteRow>(`SELECT * FROM notes WHERE isVault = 1 ORDER BY updatedAt DESC`);
-    return rows.map((row: NoteRow) => ({
+    const rows = await db.getAllAsync<any>(`SELECT * FROM notes WHERE isVault = 1 ORDER BY updatedAt DESC`);
+    const notes = rows.map(row => ({
       ...row,
       tags: JSON.parse(row.tags),
       isVault: true,
-      images: [],
+      images: []
     }));
+    const noteIds = notes.map(n => n.id);
+    if (noteIds.length) {
+      const images = await db.getAllAsync<NoteImage>(
+        `SELECT * FROM note_images WHERE noteId IN (${noteIds.map(() => '?').join(',')}) ORDER BY "order" ASC`,
+        noteIds
+      );
+      for (const note of notes) {
+        note.images = images.filter(img => img.noteId === note.id);
+      }
+    }
+    return notes;
   }
 
   static async getNotesByTag(tag: string): Promise<Note[]> {
-    const rows = await db.getAllAsync<NoteRow>(
+    const rows = await db.getAllAsync<any>(
       `SELECT * FROM notes WHERE tags LIKE ? ORDER BY updatedAt DESC`,
       [`%"${tag}"%`]
     );
-    return rows.map((row: NoteRow) => ({
+    return rows.map(row => ({
       ...row,
       tags: JSON.parse(row.tags),
       isVault: row.isVault === 1,
-      images: [],
+      images: []
     }));
   }
 

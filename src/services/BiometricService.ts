@@ -29,6 +29,22 @@ export class BiometricService {
     }
   }
 
+  static async canAuthenticate(): Promise<boolean> {
+    const hasHardware = await LocalAuthentication.hasHardwareAsync();
+    if (!hasHardware) {
+      console.log('No biometric hardware');
+      return false;
+    }
+
+    const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+    if (!isEnrolled) {
+      console.log('No biometrics enrolled');
+      return false;
+    }
+
+    return true;
+  }
+
   static async getBiometricType(): Promise<string> {
     const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
     if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {

@@ -1,21 +1,21 @@
 // src/screens/HomeScreen.tsx
 import { useEffect, useState } from 'react';
-import {
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View
-} from 'react-native';
-import { EmptyState } from '../components/EmptyState';
-import { FilterChips } from '../components/FilterChips';
-import { FloatingActionButton } from '../components/FloatingActionButton';
-import { NoteCard } from '../components/NoteCard';
+import { RefreshControl, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { FeaturedCard } from '../components/FeaturedCard';
+import { MasonryFeed } from '../components/MasonryFeed';
+import { FilterChip } from '../components/ui/FilterChip';
+import { FloatingActionButton } from '../components/ui/FloatingActionButton';
 import { useNoteStore } from '../store/useNoteStore';
+import { colors, spacing, typography } from '../theme/designTokens';
 
-export const HomeScreen = ({ navigation }: any) => {
-  const { notes, filteredNotes, loadNotes, isLoading, filterOptions, setFilterOptions } = useNoteStore();
+const filters = ['All', 'Notes', 'Links', 'Images', 'Favorites', 'Vault'];
+
+export const HomeScreen = ({ navigation }) => {
+  const { notes, loadNotes } = useNoteStore();
+  const [activeFilter, setActiveFilter] = useState('All');
   const [refreshing, setRefreshing] = useState(false);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     loadNotes();
@@ -27,102 +27,66 @@ export const HomeScreen = ({ navigation }: any) => {
     setRefreshing(false);
   };
 
-  const getSmartRecallNotes = () => {
-    // Return notes not accessed recently (older than 7 days)
-    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    return notes.filter(note => note.accessedAt < oneWeekAgo).slice(0, 5);
-  };
+  const getFeaturedItem = () => notes.length ? notes[0] : null;
 
-  const smartRecallNotes = getSmartRecallNotes();
+  const filteredNotes = notes.filter((note) => {
+    if (activeFilter === 'All') return true;
+    if (activeFilter === 'Notes') return note.type === 'note';
+    if (activeFilter === 'Links') return note.type === 'link';
+    if (activeFilter === 'Images') return note.images?.length > 0;
+    if (activeFilter === 'Favorites') return note.favorite;
+    if (activeFilter === 'Vault') return note.isVault;
+    return true;
+  });
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.logo}>Keeply</Text>
-        <Text style={styles.tagline}>Save it. Find it. Never lose it.</Text>
+  const Header = () => (
+    <>
+      {/* app header */}
+      <View style={{ paddingTop: insets.top + spacing[4], paddingHorizontal: spacing[5] }}>
+        <Text style={[typography.heading1]}>Keeply</Text>
+        <Text style={[typography.bodySmall, { color: colors.textLight }]}>Save it. Find it. Never lose it.</Text>
       </View>
 
-      <ScrollView
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-      >
-        {smartRecallNotes.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>💭 Smart Recall</Text>
-            <Text style={styles.sectionSubtitle}>Rediscover forgotten gems</Text>
-            {smartRecallNotes.map(note => (
-              <NoteCard key={note.id} note={note} />
+      {/* filter chips row (horizontal ScrollView remains – it's fine inside a FlatList header) */}
+      <View style={{ marginBottom: spacing[4] }}>
+        <View style={{ flexDirection: 'row', paddingHorizontal: spacing[5] }}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+            {filters.map((filter) => (
+              <FilterChip
+                key={filter}
+                label={filter}
+                active={activeFilter === filter}
+                onPress={() => setActiveFilter(filter)}
+              />
             ))}
           </View>
-        )}
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>All Notes</Text>
-          <FilterChips
-            selectedTags={filterOptions.tags}
-            onTagSelect={(tag) => {
-              const newTags = filterOptions.tags.includes(tag)
-                ? filterOptions.tags.filter(t => t !== tag)
-                : [...filterOptions.tags, tag];
-              setFilterOptions({ tags: newTags });
-            }}
-          />
         </View>
+      </View>
 
-        {filteredNotes.length === 0 && !isLoading ? (
-          <EmptyState
-            type="notes"
-            onAction={() => navigation.navigate('Add')}
-          />
-        ) : (
-          filteredNotes.map(note => (
-            <NoteCard key={note.id} note={note} />
-          ))
-        )}
-      </ScrollView>
+      {/* featured card */}
+      {getFeaturedItem() && (
+        <FeaturedCard
+          item={getFeaturedItem()}
+          onPress={() => navigation.navigate('NoteDetail', { noteId: getFeaturedItem().id })}
+        />
+      )}
+    </>
+  );
 
-      <FloatingActionButton onPress={() => navigation.navigate('Add')} />
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <MasonryFeed
+        data={filteredNotes}
+        onPressItem={(item) => navigation.navigate('NoteDetail', { noteId: item.id })}
+        ListHeaderComponent={<Header />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      />
+      <FloatingActionButton onSelect={(action) => {
+        if (action === 'note') navigation.navigate('Add', { type: 'note' });
+        else if (action === 'link') navigation.navigate('Add', { type: 'link' });
+        else if (action === 'image') navigation.navigate('Add', { type: 'image' });
+        else if (action === 'quick') navigation.navigate('Add', { type: 'quick' });
+      }} />
     </View>
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8f9fa',
-  },
-  header: {
-    padding: 20,
-    paddingTop: 12,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  logo: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#1a1a1a',
-  },
-  tagline: {
-    fontSize: 14,
-    color: '#666666',
-    marginTop: 4,
-  },
-  section: {
-    marginTop: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    marginHorizontal: 16,
-    marginBottom: 8,
-  },
-  sectionSubtitle: {
-    fontSize: 13,
-    color: '#888888',
-    marginHorizontal: 16,
-    marginBottom: 12,
-  },
-});

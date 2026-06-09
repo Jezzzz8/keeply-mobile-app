@@ -1,17 +1,30 @@
-import React, { useRef, useState } from 'react';
-import { Dimensions, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { Dimensions, FlatList, Text, TouchableOpacity, View } from 'react-native';
+import { Button } from '../components/ui/Button';
+import { colors, spacing, typography } from '../theme/designTokens';
+
+const { width } = Dimensions.get('window');
+
+// Helper to get SVG component from require() result
+const getSvgComponent = (svgModule: any) => {
+  // If it's a component directly, return it
+  if (typeof svgModule === 'function' || typeof svgModule === 'object' && svgModule?.render) {
+    return svgModule;
+  }
+  // If it's a module with default export (common with some transformers)
+  return svgModule?.default || svgModule;
+};
 
 const slides = [
-  { id: '1', title: 'Save anything quickly', emoji: '⚡', desc: 'Paste links, write notes, or save ideas in one tap' },
-  { id: '2', title: 'Offline-first', emoji: '📴', desc: 'Works entirely offline – your data stays on your device' },
-  { id: '3', title: 'AI-powered organization', emoji: '🤖', desc: 'Smart tags and categories, no internet required' },
-  { id: '4', title: 'Secure vault', emoji: '🔒', desc: 'Protect sensitive notes with Face ID / Touch ID' },
-  { id: '5', title: 'Smart recall', emoji: '💭', desc: 'Rediscover forgotten content automatically' },
+  { id: '1', title: 'Capture Anything', desc: 'Notes, links, images, ideas – all in one place', illustration: require('../assets/illustrations/capture.svg') },
+  { id: '2', title: 'Save Links & Previews', desc: 'Paste a URL, get a rich preview – offline', illustration: require('../assets/illustrations/links.svg') },
+  { id: '3', title: 'Organize with Ease', desc: 'Tags, favorites, and a secure vault', illustration: require('../assets/illustrations/organize.svg') },
+  { id: '4', title: 'Works Offline', desc: 'Your data stays on your device, always accessible', illustration: require('../assets/illustrations/offline.svg') },
 ];
 
 export const OnboardingScreen = ({ onFinish }: { onFinish: () => void }) => {
   const [index, setIndex] = useState(0);
-  const flatListRef = useRef<FlatList>(null);
+  const flatListRef = useRef(null);
 
   const next = () => {
     if (index < slides.length - 1) {
@@ -23,45 +36,51 @@ export const OnboardingScreen = ({ onFinish }: { onFinish: () => void }) => {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
       <FlatList
         ref={flatListRef}
         data={slides}
         horizontal
         pagingEnabled
         showsHorizontalScrollIndicator={false}
-        onMomentumScrollEnd={e => setIndex(Math.round(e.nativeEvent.contentOffset.x / width))}
-        renderItem={({ item }) => (
-          <View style={styles.slide}>
-            <Text style={styles.emoji}>{item.emoji}</Text>
-            <Text style={styles.title}>{item.title}</Text>
-            <Text style={styles.desc}>{item.desc}</Text>
-          </View>
-        )}
-        keyExtractor={item => item.id}
+        onMomentumScrollEnd={(e) => setIndex(Math.round(e.nativeEvent.contentOffset.x / width))}
+        renderItem={({ item }) => {
+          const SvgComponent = getSvgComponent(item.illustration);
+          return (
+            <View style={{ width, paddingHorizontal: spacing[6], justifyContent: 'center', alignItems: 'center', flex: 1 }}>
+              <SvgComponent
+                width={240}
+                height={240}
+                style={{ marginBottom: spacing[8] }}
+                // Remove preserveAspectRatio if it causes issues; use viewBox scaling instead
+              />
+              <Text style={[typography.heading1, { textAlign: 'center', marginBottom: spacing[4] }]}>{item.title}</Text>
+              <Text style={[typography.body, { color: colors.textLight, textAlign: 'center' }]}>{item.desc}</Text>
+            </View>
+          );
+        }}
+        keyExtractor={(item) => item.id}
       />
-      <View style={styles.footer}>
-        <TouchableOpacity onPress={onFinish}><Text style={styles.skip}>Skip</Text></TouchableOpacity>
-        <View style={styles.dots}>
-          {slides.map((_, i) => <View key={i} style={[styles.dot, i === index && styles.activeDot]} />)}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[6], paddingBottom: spacing[10] }}>
+        <TouchableOpacity onPress={onFinish}>
+          <Text style={[typography.body, { color: colors.textLight }]}>Skip</Text>
+        </TouchableOpacity>
+        <View style={{ flexDirection: 'row' }}>
+          {slides.map((_, i) => (
+            <View
+              key={i}
+              style={{
+                width: i === index ? 24 : 6,
+                height: 6,
+                borderRadius: 3,
+                backgroundColor: i === index ? colors.primary : colors.border,
+                marginHorizontal: 3,
+              }}
+            />
+          ))}
         </View>
-        <TouchableOpacity onPress={next}><Text style={styles.next}>{index === slides.length - 1 ? 'Get Started' : 'Next'}</Text></TouchableOpacity>
+        <Button title={index === slides.length - 1 ? 'Get Started' : 'Next'} onPress={next} variant="primary" />
       </View>
     </View>
   );
 };
-
-const { width } = Dimensions.get('window');
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  slide: { width, padding: 40, justifyContent: 'center', alignItems: 'center', flex: 1 },
-  emoji: { fontSize: 80, marginBottom: 40 },
-  title: { fontSize: 28, fontWeight: '700', textAlign: 'center', marginBottom: 16 },
-  desc: { fontSize: 16, color: '#666', textAlign: 'center', paddingHorizontal: 20 },
-  footer: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 30, paddingBottom: 40, alignItems: 'center' },
-  skip: { fontSize: 16, color: '#999' },
-  next: { fontSize: 16, color: '#007aff', fontWeight: '600' },
-  dots: { flexDirection: 'row' },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#ccc', marginHorizontal: 4 },
-  activeDot: { backgroundColor: '#007aff', width: 20 },
-});

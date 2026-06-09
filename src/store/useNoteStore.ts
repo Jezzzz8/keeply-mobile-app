@@ -1,18 +1,28 @@
-// src/store/useNoteStore.ts
+// src/store/useNoteStore.ts (excerpt – add these methods)
 import { create } from 'zustand';
 import { DatabaseService } from '../database/DatabaseService';
 import { AIService } from '../services/AIService';
-import { FilterOptions, Note } from '../types';
+import { FilterOptions, Note, NoteImage } from '../types';
+
+type NoteImageCreateData = Omit<NoteImage, 'id' | 'createdAt' | 'noteId'>;
+
+type NoteData = Omit<Note, 'id' | 'createdAt' | 'updatedAt' | 'accessedAt' | 'images'> & {
+  images?: NoteImageCreateData[];
+};
 
 interface NoteStore {
   notes: Note[];
   filteredNotes: Note[];
   isLoading: boolean;
   filterOptions: FilterOptions;
-  
+  links: Note[];
+  vaultNotes: Note[];
+  loadLinks: () => Promise<void>;
+  loadVaultNotes: () => Promise<void>;
+  toggleFavorite: (id: string) => Promise<void>;
   loadNotes: () => Promise<void>;
-  addNote: (note: Omit<Note, 'id' | 'createdAt' | 'updatedAt' | 'accessedAt'>) => Promise<string>;
-  updateNote: (id: string, updates: Partial<Note>) => Promise<void>;
+  addNote: (noteData: NoteData) => Promise<string>;
+  updateNote: (id: string, updates: Partial<NoteData>) => Promise<void>;
   deleteNote: (id: string) => Promise<void>;
   searchNotes: (query: string) => Promise<void>;
   applyFilters: () => void;
@@ -24,6 +34,30 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
   filteredNotes: [],
   isLoading: false,
   filterOptions: { tags: [], categories: [], types: [] },
+  links: [],
+  vaultNotes: [],
+
+  loadLinks: async () => {
+    const allNotes = await DatabaseService.getAllNotes();
+    const links = allNotes.filter(n => n.type === 'link' && n.url);
+    set({ links });
+  },
+
+  loadVaultNotes: async () => {
+    const vault = await DatabaseService.getVaultNotes(); // already exists
+    set({ vaultNotes: vault });
+  },
+
+  toggleFavorite: async (id) => {
+    const { notes } = get();
+    const note = notes.find(n => n.id === id);
+    if (note) {
+      const updated = { ...note, favorite: !note.favorite };
+      await DatabaseService.updateNote(updated);
+      await get().loadNotes(); // refresh all notes
+      await get().loadLinks();  // refresh links if needed
+    }
+  },
 
   loadNotes: async () => {
     set({ isLoading: true });
@@ -35,48 +69,61 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
   addNote: async (noteData) => {
     const id = Date.now().toString();
     const now = Date.now();
-    
-    // Run AI analysis in background
     const { tags, category, priority } = await AIService.analyzeContent(
-      noteData.content + ' ' + noteData.title, 
+      (noteData.content || '') + ' ' + (noteData.title || ''),
       noteData.type
     );
-    
     const newNote: Note = {
       id,
-      ...noteData,
+      title: noteData.title || 'Untitled',
+      content: noteData.content || '',
+      type: noteData.type,
+      url: noteData.url,
+      domain: noteData.domain,
+      description: noteData.description,
+      previewImageUri: noteData.previewImageUri,
       tags: noteData.tags || tags,
-      category: noteData.category || category,
-      priority: noteData.priority || priority,
+      category: noteData.category || category || '',
+      priority: noteData.priority || priority || 'medium',
+      isVault: noteData.isVault ?? false,
+      favorite: noteData.favorite ?? false,
+      thumbnail: noteData.thumbnail,
       createdAt: now,
       updatedAt: now,
-      accessedAt: now
+      accessedAt: now,
+      images: []
     };
-    
-    await DatabaseService.insertNote(newNote);
-    const notes = await DatabaseService.getAllNotes();
-    set({ notes });
-    get().applyFilters();
+    const imagesToInsert = noteData.images?.map((img, idx) => ({
+      noteId: id,
+      uri: img.uri,
+      mime: img.mime,
+      filename: img.filename,
+      order: idx
+    })) || [];
+    await DatabaseService.insertNote(newNote, imagesToInsert);
+    await get().loadNotes();
     return id;
   },
 
   updateNote: async (id, updates) => {
     const { notes } = get();
-    const note = notes.find(n => n.id === id);
-    if (!note) return;
-    
-    const updatedNote = { ...note, ...updates, updatedAt: Date.now() };
+    const oldNote = notes.find(n => n.id === id);
+    if (!oldNote) return;
+    const { images, ...noteUpdates } = updates;
+    const updatedNote: Note = {
+      ...oldNote,
+      ...noteUpdates,
+      updatedAt: Date.now(),
+      accessedAt: Date.now(),
+    };
     await DatabaseService.updateNote(updatedNote);
-    const updatedNotes = await DatabaseService.getAllNotes();
-    set({ notes: updatedNotes });
-    get().applyFilters();
+    // TODO: handle image updates (add/remove) – for brevity, we reload all
+    await get().loadNotes();
   },
 
   deleteNote: async (id) => {
     await DatabaseService.deleteNote(id);
-    const notes = await DatabaseService.getAllNotes();
-    set({ notes });
-    get().applyFilters();
+    await get().loadNotes();
   },
 
   searchNotes: async (query) => {
@@ -92,34 +139,23 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
   applyFilters: () => {
     const { notes, filterOptions } = get();
     let filtered = [...notes];
-    
-    if (filterOptions.tags.length > 0) {
-      filtered = filtered.filter(note => 
-        filterOptions.tags.some(tag => note.tags.includes(tag))
-      );
+    if (filterOptions.tags.length) {
+      filtered = filtered.filter(n => filterOptions.tags.some(tag => n.tags.includes(tag)));
     }
-    
-    if (filterOptions.categories.length > 0) {
-      filtered = filtered.filter(note => 
-        filterOptions.categories.includes(note.category)
-      );
+    if (filterOptions.categories.length) {
+      filtered = filtered.filter(n => filterOptions.categories.includes(n.category));
     }
-    
-    if (filterOptions.types.length > 0) {
-      filtered = filtered.filter(note => 
-        filterOptions.types.includes(note.type)
-      );
+    if (filterOptions.types.length) {
+      filtered = filtered.filter(n => filterOptions.types.includes(n.type));
     }
-    
     if (filterOptions.searchQuery) {
-      const query = filterOptions.searchQuery.toLowerCase();
-      filtered = filtered.filter(note =>
-        note.title.toLowerCase().includes(query) ||
-        note.content.toLowerCase().includes(query) ||
-        note.tags.some(tag => tag.toLowerCase().includes(query))
+      const q = filterOptions.searchQuery.toLowerCase();
+      filtered = filtered.filter(n =>
+        n.title.toLowerCase().includes(q) ||
+        n.content.toLowerCase().includes(q) ||
+        n.tags.some(t => t.toLowerCase().includes(q))
       );
     }
-    
     set({ filteredNotes: filtered });
   },
 

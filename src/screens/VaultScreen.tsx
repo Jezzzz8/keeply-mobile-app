@@ -1,135 +1,65 @@
-// src/screens/VaultScreen.tsx
-import React, { useEffect, useState } from 'react';
-import {
-  Alert,
-  FlatList,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-import { EmptyState } from '../components/EmptyState';
-import { NoteCard } from '../components/NoteCard';
+import { Feather as Icon } from '@expo/vector-icons';
+import { NavigationProp, useNavigation } from '@react-navigation/native';
+import { useEffect, useState } from 'react';
+import { FlatList, Text, View } from 'react-native';
+import { Button } from '../components/ui/Button';
+import { Card } from '../components/ui/Card';
+import { RootStackParamList } from '../navigation/types';
 import { BiometricService } from '../services/BiometricService';
 import { useNoteStore } from '../store/useNoteStore';
+import { colors, spacing, typography } from '../theme/designTokens';
 
 export const VaultScreen = () => {
-  const { notes, loadNotes } = useNoteStore();
-  const [isUnlocked, setIsUnlocked] = useState(false);
-  const [biometricType, setBiometricType] = useState('Biometric');
-  const vaultNotes = notes.filter(n => n.isVault);
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
+  const [unlocked, setUnlocked] = useState(false);
+  const { vaultNotes, loadVaultNotes } = useNoteStore();
 
   useEffect(() => {
-    BiometricService.getBiometricType().then(setBiometricType);
-    if (!isUnlocked) {
-      authenticate();
-    }
-  }, []);
+    if (unlocked) loadVaultNotes();
+  }, [unlocked]);
 
   const authenticate = async () => {
     const success = await BiometricService.authenticate();
     if (success) {
-      setIsUnlocked(true);
-      loadNotes();
-    } else {
-      Alert.alert(
-        'Access Denied',
-        'Unable to verify your identity. Vault access requires biometric authentication.',
-        [{ text: 'OK', onPress: () => {} }]
-      );
+      setUnlocked(true);
+      await loadVaultNotes();
     }
   };
 
-  if (!isUnlocked) {
+  if (!unlocked) {
     return (
-      <View style={styles.lockedContainer}>
-        <Text style={styles.lockIcon}>🔒</Text>
-        <Text style={styles.lockedTitle}>Vault Locked</Text>
-        <Text style={styles.lockedText}>Your private notes are secured with biometric authentication</Text>
-        <TouchableOpacity style={styles.unlockButton} onPress={authenticate}>
-          <Text style={styles.unlockButtonText}>Unlock Vault</Text>
-        </TouchableOpacity>
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: spacing[6] }}>
+        <Icon name={"lock" as any} size={48} color={colors.text} style={{ marginBottom: spacing[4] }} />
+        <Text style={[typography.heading2, { marginBottom: spacing[4] }]}>Vault Locked</Text>
+        <Text style={[typography.body, { color: colors.textLight, textAlign: 'center', marginBottom: spacing[8] }]}>
+          Your private notes are secured with biometric authentication.
+        </Text>
+        <Button title="Unlock Vault" onPress={authenticate} variant="primary" />
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>🔐 Vault</Text>
-        <Text style={styles.subtitle}>Secured with {biometricType}</Text>
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <View style={{ padding: spacing[5] }}>
+        <Text style={[typography.heading1]}>Vault</Text>
       </View>
-      
-      {vaultNotes.length === 0 ? (
-        <EmptyState type="vault" />
-      ) : (
-        <FlatList
-          data={vaultNotes}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <NoteCard note={item} />}
-          contentContainerStyle={styles.list}
-        />
-      )}
+      <FlatList
+        data={vaultNotes}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => (
+          <Card
+            type={item.type}
+            title={item.title}
+            subtitle={item.content?.slice(0, 80)}
+            thumbnail={item.thumbnail}
+            tags={item.tags}
+            timestamp={item.updatedAt}
+            onPress={() => navigation.navigate('NoteDetail', { noteId: item.id })}
+          />
+        )}
+        contentContainerStyle={{ paddingHorizontal: spacing[4], paddingBottom: 80 }}
+      />
     </View>
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8f9fa',
-  },
-  lockedContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f8f9fa',
-    padding: 40,
-  },
-  lockIcon: {
-    fontSize: 80,
-    marginBottom: 24,
-  },
-  lockedTitle: {
-    fontSize: 24,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    marginBottom: 12,
-  },
-  lockedText: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 32,
-  },
-  unlockButton: {
-    backgroundColor: '#007aff',
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    borderRadius: 12,
-  },
-  unlockButtonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  header: {
-    padding: 20,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#1a1a1a',
-  },
-  subtitle: {
-    fontSize: 13,
-    color: '#888',
-    marginTop: 4,
-  },
-  list: {
-    paddingVertical: 8,
-  },
-});

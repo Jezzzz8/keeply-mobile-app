@@ -1,22 +1,22 @@
 export interface NoteImage {
   id: string;
   noteId: string;
-  data: string;        // base64
-  mime: string;        // e.g. 'image/jpeg'
+  uri: string;          // file URI (not Base64)
+  mime: string;
   filename?: string;
-  order: number;       // display order within the note
+  order: number;
   createdAt: number;
 }
 
 export interface Note {
   id: string;
   title: string;
-  content: string;          // plain text (no images in here)
+  content: string;
   type: 'note' | 'link' | 'idea' | 'clipboard' | 'quick';
-  url?: string;             // for links
+  url?: string;
   domain?: string;
-  description?: string;     // extracted from page or user supplied
-  previewImageId?: string;  // ID of the cached preview image (if any)
+  description?: string;
+  previewImageUri?: string;
   tags: string[];
   category: string;
   priority: 'low' | 'medium' | 'high';
@@ -24,7 +24,9 @@ export interface Note {
   createdAt: number;
   updatedAt: number;
   accessedAt: number;
-  images?: NoteImage[];     // filled at query time
+  images?: NoteImage[];
+  favorite?: boolean;
+  thumbnail?: string;
 }
 
 export interface FilterOptions {

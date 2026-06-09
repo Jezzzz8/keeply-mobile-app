@@ -1,127 +1,62 @@
-// src/components/NoteCard.tsx
+import { Feather as Icon } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
-import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StackNavigationProp } from '@react-navigation/stack';
+import { Text, TouchableOpacity, View } from 'react-native';
+import { RootStackParamList } from '../navigation/types';
+import { borderRadius, colors, shadows, spacing, typography } from '../theme/designTokens';
 import { Note } from '../types';
 
-interface NoteCardProps {
-  note: Note;
-  onPress?: () => void;
-}
+type NavigationProp = StackNavigationProp<RootStackParamList, 'NoteDetail'>;
 
-export const NoteCard: React.FC<NoteCardProps> = ({ note, onPress }) => {
-  const navigation = useNavigation();
+export const NoteCard = ({ note, onPress }: { note: Note; onPress?: () => void }) => {
+  const navigation = useNavigation<NavigationProp>();
 
   const handlePress = () => {
     navigation.navigate('NoteDetail', { noteId: note.id });
     onPress?.();
   };
 
-  const getTypeIcon = () => {
-    const icons: Record<string, string> = {
-      link: '🔗',
-      idea: '💡',
-      clipboard: '📋',
-      quick: '⚡',
-      note: '📝'
-    };
-    return icons[note.type] || '📄';
-  };
-
-  const formatDate = (timestamp: number) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const hours = diff / (1000 * 60 * 60);
-    
-    if (hours < 24) {
-      return `${Math.floor(hours)}h ago`;
-    } else {
-      return date.toLocaleDateString();
+  const getTypeIcon = (type: Note['type']) => {
+    switch (type) {
+      case 'link': return 'link';
+      case 'idea': return 'bulb';
+      case 'clipboard': return 'clipboard';
+      case 'quick': return 'zap';
+      default: return 'file-text';
     }
   };
 
+  const stripHtml = (html: string) => html.replace(/<[^>]*>/g, '').substring(0, 100);
+  const formatDate = (timestamp: number) => {
+    const date = new Date(timestamp);
+    const hours = (Date.now() - date.getTime()) / (1000 * 60 * 60);
+    return hours < 24 ? `${Math.floor(hours)}h ago` : date.toLocaleDateString();
+  };
+
   return (
-    <TouchableOpacity style={styles.card} onPress={handlePress}>
-      <View style={styles.header}>
-        <Text style={styles.typeIcon}>{getTypeIcon()}</Text>
-        <Text style={styles.title} numberOfLines={2}>{note.title}</Text>
+    <TouchableOpacity
+      style={[shadows.md, { backgroundColor: colors.surface, borderRadius: borderRadius.md, padding: spacing[4], marginHorizontal: spacing[4], marginVertical: spacing[2] }]}
+      onPress={handlePress}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing[2] }}>
+        <Icon name={getTypeIcon(note.type) as any} size={20} color={colors.primary} style={{ marginRight: spacing[2] }} />
+        <Text style={[typography.body, { fontWeight: '600', color: colors.text, flex: 1 }]} numberOfLines={2}>
+          {note.title}
+        </Text>
       </View>
-      
-      <Text style={styles.preview} numberOfLines={2}>
-        {note.content.substring(0, 100)}
+      <Text style={[typography.bodySmall, { color: colors.textLight, marginBottom: spacing[3] }]} numberOfLines={2}>
+        {stripHtml(note.content)}
       </Text>
-      
-      <View style={styles.footer}>
-        <View style={styles.tagContainer}>
-          {note.tags.slice(0, 3).map((tag, index) => (
-            <View key={index} style={styles.tag}>
-              <Text style={styles.tagText}>#{tag}</Text>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing[1] }}>
+          {note.tags.slice(0, 3).map((tag, idx) => (
+            <View key={idx} style={{ backgroundColor: colors.border, paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.sm }}>
+              <Text style={{ fontSize: 10, color: colors.textLight }}>#{tag}</Text>
             </View>
           ))}
         </View>
-        <Text style={styles.timestamp}>{formatDate(note.updatedAt)}</Text>
+        <Text style={{ fontSize: 10, color: colors.textLight }}>{formatDate(note.updatedAt)}</Text>
       </View>
     </TouchableOpacity>
   );
 };
-
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 16,
-    marginHorizontal: 16,
-    marginVertical: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  typeIcon: {
-    fontSize: 20,
-    marginRight: 8,
-  },
-  title: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    flex: 1,
-  },
-  preview: {
-    fontSize: 14,
-    color: '#666666',
-    lineHeight: 20,
-    marginBottom: 12,
-  },
-  footer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  tagContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  tag: {
-    backgroundColor: '#f0f0f0',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  tagText: {
-    fontSize: 11,
-    color: '#666666',
-  },
-  timestamp: {
-    fontSize: 11,
-    color: '#999999',
-  },
-});

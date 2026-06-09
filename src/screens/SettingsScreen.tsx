@@ -1,26 +1,33 @@
-// src/screens/SettingsScreen.tsx
+import { Feather as Icon } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
+import * as SecureStore from 'expo-secure-store';
 import * as Sharing from 'expo-sharing';
 import { useEffect, useState } from 'react';
-import {
-  Alert,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TouchableOpacity,
-  View
-} from 'react-native';
+import { Alert, ScrollView, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DatabaseService } from '../database/DatabaseService';
 import { useTheme } from '../hooks/useTheme';
+import { borderRadius, colors, spacing, typography } from '../theme/designTokens';
+
+// Helper to get document directory safely (bypass TypeScript issue)
+const getDocumentDir = (): string => {
+  // @ts-ignore - documentDirectory exists at runtime
+  return FileSystem.documentDirectory as string;
+};
 
 export const SettingsScreen = () => {
+  const insets = useSafeAreaInsets();
   const { theme, toggleTheme } = useTheme();
   const [biometricEnabled, setBiometricEnabled] = useState(true);
   const [autoTagging, setAutoTagging] = useState(true);
   const [hapticsEnabled, setHapticsEnabled] = useState(true);
   const [storageSize, setStorageSize] = useState('0 MB');
+  const [pinSet, setPinSet] = useState(false);
+  const [pinModalVisible, setPinModalVisible] = useState(false);
+  const [pinValue, setPinValue] = useState('');
+  const [confirmPinValue, setConfirmPinValue] = useState('');
+  const [pinMessage, setPinMessage] = useState('');
 
   useEffect(() => {
     loadSettings();
@@ -31,10 +38,11 @@ export const SettingsScreen = () => {
     const savedBiometric = await AsyncStorage.getItem('biometricEnabled');
     const savedAutoTagging = await AsyncStorage.getItem('autoTagging');
     const savedHaptics = await AsyncStorage.getItem('hapticsEnabled');
-    
+    const storedPin = await SecureStore.getItemAsync('vaultPin');
     if (savedBiometric !== null) setBiometricEnabled(savedBiometric === 'true');
     if (savedAutoTagging !== null) setAutoTagging(savedAutoTagging === 'true');
     if (savedHaptics !== null) setHapticsEnabled(savedHaptics === 'true');
+    setPinSet(Boolean(storedPin));
   };
 
   const calculateStorage = async () => {
@@ -44,32 +52,44 @@ export const SettingsScreen = () => {
     setStorageSize(`${mb} MB`);
   };
 
+  const savePin = async () => {
+    if (!pinValue || pinValue.length < 4) {
+      setPinMessage('PIN must be at least 4 digits.');
+      return;
+    }
+    if (pinValue !== confirmPinValue) {
+      setPinMessage('PINs do not match.');
+      return;
+    }
+    await SecureStore.setItemAsync('vaultPin', pinValue);
+    setPinSet(true);
+    setPinModalVisible(false);
+    setPinValue('');
+    setConfirmPinValue('');
+    setPinMessage('PIN saved successfully.');
+  };
+
+  const removePin = async () => {
+    await SecureStore.deleteItemAsync('vaultPin');
+    setPinSet(false);
+    setPinMessage('Vault PIN removed.');
+  };
+
   const exportData = async () => {
     const notes = await DatabaseService.getAllNotes();
-    const exportData = {
-      exportDate: new Date().toISOString(),
-      version: '1.0.0',
-      notes: notes,
-    };
-    const dataStr = JSON.stringify(exportData, null, 2);
-    const exportFile = new FileSystem.File(FileSystem.Paths.cache, `keeply-export-${Date.now()}.json`);
-
-    try {
-      await exportFile.write(dataStr, {
-        encoding: FileSystem.EncodingType.UTF8,
-      });
-
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(exportFile.uri, {
-          mimeType: 'application/json',
-          dialogTitle: 'Export Keeply Data',
-        });
-      } else {
-        Alert.alert('Export not available', 'Sharing is not available on this device');
-      }
-    } catch (error) {
-      console.warn('Failed to export data', error);
-      Alert.alert('Export failed', 'Unable to export data at this time.');
+    const exportObj = { exportDate: new Date().toISOString(), version: '1.0.0', notes };
+    const jsonStr = JSON.stringify(exportObj, null, 2);
+    const documentDir = getDocumentDir();
+    if (!documentDir) {
+      Alert.alert('Error', 'Unable to access document directory');
+      return;
+    }
+    const fileUri = `${documentDir}keeply-export-${Date.now()}.json`;
+    await FileSystem.writeAsStringAsync(fileUri, jsonStr, { encoding: FileSystem.EncodingType.UTF8 });
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(fileUri, { mimeType: 'application/json', dialogTitle: 'Export Keeply Data' });
+    } else {
+      Alert.alert('Export not available', 'Sharing is not supported on this device');
     }
   };
 
@@ -84,146 +104,136 @@ export const SettingsScreen = () => {
       'This will permanently delete all your notes and settings. This action cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Delete', 
+        {
+          text: 'Delete',
           style: 'destructive',
           onPress: async () => {
             const notes = await DatabaseService.getAllNotes();
-            for (const note of notes) {
-              await DatabaseService.deleteNote(note.id);
-            }
+            for (const note of notes) await DatabaseService.deleteNote(note.id);
             await AsyncStorage.clear();
             Alert.alert('Data cleared', 'All data has been deleted');
-          }
-        }
+          },
+        },
       ]
     );
   };
 
+  const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
+    <View style={{ backgroundColor: colors.surface, marginTop: spacing[4], paddingHorizontal: spacing[4], borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.border }}>
+      <Text style={{ fontSize: 10, fontWeight: '600', color: colors.textLight, paddingVertical: spacing[3], textTransform: 'uppercase' }}>{title}</Text>
+      {children}
+    </View>
+  );
+
+  const Row = ({ label, value, onPress, isSwitch, switchValue, onSwitchChange }: any) => (
+    <TouchableOpacity style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing[3], borderTopWidth: 1, borderColor: colors.border }} onPress={onPress} disabled={!onPress}>
+      <Text style={{ fontSize: 16, color: colors.text }}>{label}</Text>
+      {isSwitch ? (
+        <Switch value={switchValue} onValueChange={onSwitchChange} trackColor={{ false: colors.border, true: colors.primary }} />
+      ) : (
+        <Text style={{ fontSize: 16, color: colors.textLight }}>{value}</Text>
+      )}
+    </TouchableOpacity>
+  );
+
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Appearance</Text>
-        <TouchableOpacity style={styles.settingItem} onPress={toggleTheme}>
-          <Text style={styles.settingLabel}>Dark Mode</Text>
-          <Text style={styles.settingValue}>{theme === 'dark' ? 'On' : 'Off'}</Text>
-        </TouchableOpacity>
+    <ScrollView style={{ backgroundColor: colors.background, paddingTop: insets.top + spacing[4] }}>
+      <View style={{ paddingHorizontal: spacing[5] }}>
+        <Text style={[typography.heading1]}>Settings</Text>
+        <Row label="Dark Mode" value={theme === 'dark' ? 'On' : 'Off'} onPress={toggleTheme} />
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Privacy & Security</Text>
-        <View style={styles.settingItem}>
-          <Text style={styles.settingLabel}>Biometric Lock</Text>
-          <Switch
-            value={biometricEnabled}
-            onValueChange={async (value) => {
-              setBiometricEnabled(value);
-              await AsyncStorage.setItem('biometricEnabled', String(value));
-            }}
-            trackColor={{ false: '#e0e0e0', true: '#007aff' }}
-          />
+      <Section title="Privacy & Security">
+        <Row label="Biometric Lock" isSwitch switchValue={biometricEnabled} onSwitchChange={async (value) => {
+          setBiometricEnabled(value);
+          await AsyncStorage.setItem('biometricEnabled', String(value));
+        }} />
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing[3], borderTopWidth: 1, borderColor: colors.border }}>
+          <View>
+            <Text style={{ fontSize: 16, color: colors.text }}>Vault PIN</Text>
+            <Text style={{ fontSize: 14, color: colors.textLight }}>{pinSet ? 'Configured' : 'Not set'}</Text>
+          </View>
+          <TouchableOpacity onPress={() => setPinModalVisible(true)}>
+            <Text style={{ color: colors.primary, fontWeight: '600' }}>{pinSet ? 'Change' : 'Set'}</Text>
+          </TouchableOpacity>
         </View>
-      </View>
+        {pinSet && (
+          <TouchableOpacity style={{ paddingVertical: spacing[3], borderTopWidth: 1, borderColor: colors.border }} onPress={removePin}>
+            <Text style={{ fontSize: 16, color: colors.error }}>Remove PIN</Text>
+          </TouchableOpacity>
+        )}
+        {pinModalVisible && (
+          <View style={{ backgroundColor: colors.background, marginTop: spacing[4], padding: spacing[4], borderRadius: borderRadius.md, borderWidth: 1, borderColor: colors.border }}>
+            <Text style={{ fontSize: 16, fontWeight: '600', color: colors.text, marginBottom: spacing[2] }}>{pinSet ? 'Change Vault PIN' : 'Set Vault PIN'}</Text>
+            <TextInput
+              style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: borderRadius.md, paddingHorizontal: spacing[4], paddingVertical: spacing[3], color: colors.text, marginBottom: spacing[3] }}
+              placeholder="Enter PIN"
+              placeholderTextColor="#999"
+              secureTextEntry
+              keyboardType="numeric"
+              value={pinValue}
+              onChangeText={setPinValue}
+            />
+            <TextInput
+              style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: borderRadius.md, paddingHorizontal: spacing[4], paddingVertical: spacing[3], color: colors.text, marginBottom: spacing[3] }}
+              placeholder="Confirm PIN"
+              placeholderTextColor="#999"
+              secureTextEntry
+              keyboardType="numeric"
+              value={confirmPinValue}
+              onChangeText={setConfirmPinValue}
+            />
+            {pinMessage ? <Text style={{ fontSize: 14, color: colors.error, marginBottom: spacing[3] }}>{pinMessage}</Text> : null}
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+              <TouchableOpacity style={{ marginRight: spacing[3] }} onPress={() => {
+                setPinModalVisible(false);
+                setPinValue('');
+                setConfirmPinValue('');
+                setPinMessage('');
+              }}>
+                <Text style={{ color: colors.text }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={{ backgroundColor: colors.primary, paddingHorizontal: spacing[4], paddingVertical: spacing[2], borderRadius: borderRadius.md }} onPress={savePin}>
+                <Text style={{ color: colors.surface, fontWeight: '600' }}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </Section>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>AI & Organization</Text>
-        <View style={styles.settingItem}>
-          <Text style={styles.settingLabel}>Auto-Tagging</Text>
-          <Switch
-            value={autoTagging}
-            onValueChange={async (value) => {
-              setAutoTagging(value);
-              await AsyncStorage.setItem('autoTagging', String(value));
-            }}
-            trackColor={{ false: '#e0e0e0', true: '#007aff' }}
-          />
-        </View>
-        <View style={styles.settingItem}>
-          <Text style={styles.settingLabel}>Haptics</Text>
-          <Switch
-            value={hapticsEnabled}
-            onValueChange={async (value) => {
-              setHapticsEnabled(value);
-              await AsyncStorage.setItem('hapticsEnabled', String(value));
-            }}
-            trackColor={{ false: '#e0e0e0', true: '#007aff' }}
-          />
-        </View>
-      </View>
+      <Section title="AI & Organization">
+        <Row label="Auto-Tagging" isSwitch switchValue={autoTagging} onSwitchChange={async (value) => {
+          setAutoTagging(value);
+          await AsyncStorage.setItem('autoTagging', String(value));
+        }} />
+        <Row label="Haptics" isSwitch switchValue={hapticsEnabled} onSwitchChange={async (value) => {
+          setHapticsEnabled(value);
+          await AsyncStorage.setItem('hapticsEnabled', String(value));
+        }} />
+      </Section>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Data Management</Text>
-        <TouchableOpacity style={styles.settingItem} onPress={exportData}>
-          <Text style={styles.settingLabel}>Export Data</Text>
-          <Text style={styles.settingValue}>→</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.settingItem} onPress={replayOnboarding}>
-          <Text style={styles.settingLabel}>Replay Onboarding</Text>
-          <Text style={styles.settingValue}>→</Text>
-        </TouchableOpacity>
-        <View style={styles.settingItem}>
-          <Text style={styles.settingLabel}>Storage Used</Text>
-          <Text style={styles.settingValue}>{storageSize}</Text>
-        </View>
-      </View>
+      <Section title="Data Management">
+        <Row label="Export Data" value="→" onPress={exportData} />
+        <Row label="Replay Onboarding" value="→" onPress={replayOnboarding} />
+        <Row label="Storage Used" value={storageSize} />
+      </Section>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>About</Text>
-        <TouchableOpacity style={styles.settingItem} onPress={clearAllData}>
-          <Text style={[styles.settingLabel, styles.dangerText]}>Clear All Data</Text>
-          <Text style={styles.dangerValue}>⚠️</Text>
+      <Section title="About">
+        <TouchableOpacity style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing[3], borderTopWidth: 1, borderColor: colors.border }} onPress={clearAllData}>
+          <Text style={{ fontSize: 16, color: colors.error }}>Clear All Data</Text>
+          <Icon name="alert-triangle" size={20} color={colors.error} />
         </TouchableOpacity>
-        <View style={styles.settingItem}>
-          <Text style={styles.settingLabel}>Version</Text>
-          <Text style={styles.settingValue}>1.0.0</Text>
-        </View>
-      </View>
+        // becomes:
+        <TouchableOpacity style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing[3], borderTopWidth: 1, borderColor: colors.border }} onPress={clearAllData}>
+          <Text style={{ fontSize: 16, color: colors.error }}>Clear All Data</Text>
+          <Icon name="alert-triangle" size={20} color={colors.error} />
+        </TouchableOpacity>
+        <Icon name="alert-triangle" size={20} color={colors.error} />
+        <Icon name={"alert-triangle" as any} size={20} color={colors.error} />
+        <Row label="Version" value="1.0.0" />
+      </Section>
+
+      <View style={{ height: insets.bottom + 20 }} />
     </ScrollView>
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8f9fa',
-  },
-  section: {
-    backgroundColor: '#ffffff',
-    marginTop: 20,
-    paddingHorizontal: 16,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#888888',
-    paddingVertical: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  settingItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-  },
-  settingLabel: {
-    fontSize: 16,
-    color: '#1a1a1a',
-  },
-  settingValue: {
-    fontSize: 16,
-    color: '#888888',
-  },
-  dangerText: {
-    color: '#ff3b30',
-  },
-  dangerValue: {
-    fontSize: 16,
-    color: '#ff3b30',
-  },
-});

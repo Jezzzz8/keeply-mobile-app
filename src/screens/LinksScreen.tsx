@@ -1,50 +1,44 @@
-import React, { useEffect } from 'react';
-import { FlatList, Image, Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+// src/screens/LinksScreen.tsx
+import { useEffect, useState } from 'react';
+import { FlatList, Linking, Text, View } from 'react-native'; // ← added Linking
+import { LinkPreview } from '../components/LinkPreview';
+import { SearchBar } from '../components/ui/SearchBar'; // we'll create this next
 import { useNoteStore } from '../store/useNoteStore';
-import { Note } from '../types';
+import { colors, spacing, typography } from '../theme/designTokens';
 
 export const LinksScreen = () => {
-  const { notes, loadNotes } = useNoteStore();
-  const links = notes.filter(n => n.type === 'link');
+  const { links, loadLinks } = useNoteStore();
+  const [search, setSearch] = useState('');
 
-  useEffect(() => { loadNotes(); }, []);
+  useEffect(() => {
+    loadLinks();
+  }, []);
 
-  const openLink = (url: string) => { Linking.openURL(url); };
-
-  const renderLinkCard = ({ item }: { item: Note }) => {
-    const previewImage = item.images?.find(img => img.id === item.previewImageId);
-    return (
-      <TouchableOpacity style={styles.card} onPress={() => openLink(item.url!)}>
-        {previewImage && <Image source={{ uri: previewImage.data }} style={styles.previewImage} />}
-        <View style={styles.cardContent}>
-          <Text style={styles.title} numberOfLines={2}>{item.title}</Text>
-          {item.domain && <Text style={styles.domain}>{item.domain}</Text>}
-          {item.description && <Text style={styles.description} numberOfLines={2}>{item.description}</Text>}
-        </View>
-      </TouchableOpacity>
-    );
-  };
+  const filteredLinks = links.filter(link =>
+    link.title?.toLowerCase().includes(search.toLowerCase()) ||
+    link.url?.includes(search)
+  );
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.header}>Saved Links</Text>
-      {links.length === 0 ? (
-        <Text style={styles.empty}>No links saved yet. Share or copy links to Keeply.</Text>
-      ) : (
-        <FlatList data={links} keyExtractor={item => item.id} renderItem={renderLinkCard} />
-      )}
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <View style={{ padding: spacing[5] }}>
+        <Text style={[typography.heading1]}>Links</Text>
+        <SearchBar value={search} onChangeText={setSearch} placeholder="Search saved links..." />
+      </View>
+      <FlatList
+        data={filteredLinks}
+        keyExtractor={item => item.id}
+        renderItem={({ item }) => (
+          <LinkPreview
+            url={item.url}
+            title={item.title}
+            description={item.description}
+            thumbnail={item.thumbnail}
+            onPress={() => Linking.openURL(item.url)}
+          />
+        )}
+        contentContainerStyle={{ paddingHorizontal: spacing[5], paddingBottom: 80 }}
+      />
     </View>
   );
 };
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8f9fa', paddingTop: 60 },
-  header: { fontSize: 28, fontWeight: '700', paddingHorizontal: 20, paddingBottom: 12 },
-  card: { flexDirection: 'row', backgroundColor: '#fff', marginHorizontal: 16, marginVertical: 8, borderRadius: 12, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.05, elevation: 2 },
-  previewImage: { width: 80, height: 80 },
-  cardContent: { flex: 1, padding: 12 },
-  title: { fontSize: 16, fontWeight: '600', marginBottom: 4 },
-  domain: { fontSize: 12, color: '#666', marginBottom: 4 },
-  description: { fontSize: 13, color: '#333' },
-  empty: { textAlign: 'center', marginTop: 60, color: '#999' }
-});

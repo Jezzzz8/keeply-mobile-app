@@ -1,30 +1,47 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Image,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
-  StyleSheet,
-  Text, TextInput,
+  Text,
+  TextInput,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 import DraggableFlatList from 'react-native-draggable-flatlist';
+import { RichEditor, RichToolbar } from 'react-native-pell-rich-editor';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNoteStore } from '../store/useNoteStore';
+import { borderRadius, colors, spacing, typography } from '../theme/designTokens';
 import { NoteImage } from '../types';
-import { pasteImageFromClipboard, pickImageFromGallery } from '../utils/imageUtils';
+import {
+  pasteImageFromClipboard,
+  pickImageFromGallery,
+  takePhotoWithCamera,
+} from '../utils/imageUtils';
 
 export const AddScreen = ({ navigation, route }: any) => {
+  const insets = useSafeAreaInsets();
   const { addNote, updateNote } = useNoteStore();
   const editingNote = route.params?.note;
   const [title, setTitle] = useState(editingNote?.title || '');
   const [content, setContent] = useState(editingNote?.content || '');
   const [images, setImages] = useState<NoteImage[]>(editingNote?.images || []);
   const [isSaving, setIsSaving] = useState(false);
+  const richTextRef = useRef<RichEditor>(null);
+  const autoSaveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const autoSave = useCallback(async () => {
+  const performSave = useCallback(async () => {
     if ((!title.trim() && !content.trim() && images.length === 0) || isSaving) return;
     setIsSaving(true);
+    const imagesForSave: Omit<NoteImage, 'id' | 'createdAt' | 'noteId'>[] = images.map((img, idx) => ({
+      uri: img.uri,
+      mime: img.mime,
+      filename: img.filename,
+      order: idx,
+    }));
     const noteData = {
       title: title.trim() || 'Untitled',
       content: content.trim(),
@@ -34,7 +51,7 @@ export const AddScreen = ({ navigation, route }: any) => {
       category: editingNote?.category || '',
       priority: editingNote?.priority || 'medium',
       isVault: editingNote?.isVault || false,
-      images: images.map((img, idx) => ({ ...img, order: idx }))
+      images: imagesForSave,
     };
     if (editingNote) {
       await updateNote(editingNote.id, noteData);
@@ -43,69 +60,157 @@ export const AddScreen = ({ navigation, route }: any) => {
     }
     setIsSaving(false);
     navigation.goBack();
-  }, [title, content, images, editingNote]);
+  }, [title, content, images, editingNote, addNote, updateNote, navigation]);
 
   useEffect(() => {
-    const timer = setTimeout(() => { if (title || content || images.length) autoSave(); }, 2000);
-    return () => clearTimeout(timer);
-  }, [title, content, images, autoSave]);
+    if (autoSaveTimeout.current) clearTimeout(autoSaveTimeout.current);
+    autoSaveTimeout.current = setTimeout(() => {
+      if (title || content || images.length) performSave();
+    }, 1000);
+    return () => {
+      if (autoSaveTimeout.current) clearTimeout(autoSaveTimeout.current);
+    };
+  }, [title, content, images, performSave]);
 
   const handleAddImage = async () => {
     Alert.alert('Add Image', 'Choose source', [
-      { text: 'Gallery', onPress: async () => {
-        const base64 = await pickImageFromGallery();
-        if (base64) addImageItem(base64);
-      }},
-      { text: 'Paste from Clipboard', onPress: async () => {
-        const base64 = await pasteImageFromClipboard();
-        if (base64) addImageItem(base64);
-      }},
-      { text: 'Cancel', style: 'cancel' }
+      {
+        text: 'Gallery',
+        onPress: async () => {
+          const uri = await pickImageFromGallery();
+          if (uri) addImageItem(uri);
+        },
+      },
+      {
+        text: 'Camera',
+        onPress: async () => {
+          const uri = await takePhotoWithCamera();
+          if (uri) addImageItem(uri);
+        },
+      },
+      {
+        text: 'Paste from Clipboard',
+        onPress: async () => {
+          const uri = await pasteImageFromClipboard();
+          if (uri) addImageItem(uri);
+        },
+      },
+      { text: 'Cancel', style: 'cancel' },
     ]);
   };
 
-  const addImageItem = (dataUri: string) => {
+  const addImageItem = (uri: string) => {
     const newImage: NoteImage = {
       id: Date.now().toString(),
       noteId: editingNote?.id || 'temp',
-      data: dataUri,
-      mime: dataUri.split(';')[0].split(':')[1],
+      uri,
+      mime: 'image/jpeg',
       order: images.length,
-      createdAt: Date.now()
+      createdAt: Date.now(),
     };
-    setImages(prev => [...prev, newImage]);
+    setImages((prev) => [...prev, newImage]);
   };
 
   const removeImage = (id: string) => {
-    setImages(prev => prev.filter(img => img.id !== id).map((img, idx) => ({ ...img, order: idx })));
+    setImages((prev) =>
+      prev.filter((img) => img.id !== id).map((img, idx) => ({ ...img, order: idx }))
+    );
   };
 
   const renderImageItem = ({ item, drag, isActive }: any) => (
     <TouchableOpacity
-      style={[styles.imageItem, isActive && styles.dragging]}
+      style={[
+        { marginRight: spacing[3], position: 'relative' },
+        isActive && { opacity: 0.7 },
+      ]}
       onLongPress={drag}
       delayLongPress={200}
     >
-      <Image source={{ uri: item.data }} style={styles.imageThumb} />
-      <TouchableOpacity style={styles.removeImageBtn} onPress={() => removeImage(item.id)}>
-        <Text style={styles.removeText}>✕</Text>
+      <Image source={{ uri: item.uri }} style={{ width: 96, height: 96, borderRadius: borderRadius.md }} />
+      <TouchableOpacity
+        style={{
+          position: 'absolute',
+          top: -8,
+          right: -8,
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          borderRadius: 24,
+          width: 24,
+          height: 24,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+        onPress={() => removeImage(item.id)}
+      >
+        <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>✕</Text>
       </TouchableOpacity>
     </TouchableOpacity>
   );
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}><Text style={styles.cancel}>Cancel</Text></TouchableOpacity>
-        <Text style={styles.headerTitle}>{editingNote ? 'Edit' : 'New'} Note</Text>
-        <TouchableOpacity onPress={autoSave}><Text style={styles.save}>Save</Text></TouchableOpacity>
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: colors.surface }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <View
+        style={{
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          paddingHorizontal: spacing[5],
+          paddingTop: insets.top + spacing[4],
+          paddingBottom: spacing[4],
+          borderBottomWidth: 1,
+          borderColor: colors.border,
+        }}
+      >
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Text style={{ fontSize: 16, color: colors.textLight }}>Cancel</Text>
+        </TouchableOpacity>
+        <Text style={{ fontSize: 16, fontWeight: '600', color: colors.text }}>
+          {editingNote ? 'Edit' : 'New'} Note
+        </Text>
+        <TouchableOpacity onPress={performSave}>
+          <Text style={{ fontSize: 16, fontWeight: '600', color: colors.primary }}>Save</Text>
+        </TouchableOpacity>
       </View>
-      <ScrollView style={styles.scroll}>
-        <TextInput style={styles.titleInput} placeholder="Title" value={title} onChangeText={setTitle} />
-        <TextInput style={styles.bodyInput} placeholder="Write your note..." multiline value={content} onChangeText={setContent} />
+
+      <ScrollView style={{ flex: 1, padding: spacing[4] }} contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}>
+        <TextInput
+          style={[typography.heading2, { color: colors.text, marginBottom: spacing[4] }]}
+          placeholder="Title"
+          placeholderTextColor={colors.textLight}
+          value={title}
+          onChangeText={setTitle}
+        />
+        <RichToolbar
+          editor={richTextRef}
+          actions={['bold', 'italic', 'underline', 'unorderedList', 'orderedList', 'checklist', 'heading1', 'alignLeft', 'removeFormat']}
+          iconMap={{
+            heading1: ({ tintColor }: { tintColor: string }) => (
+              <Text style={{ color: tintColor, fontFamily: 'System' }}>H1</Text>
+            ),
+          }}
+          style={{ backgroundColor: colors.surface, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.border, marginVertical: spacing[2] }}
+          selectedIconTint={colors.primary}
+          unselectedIconTint={colors.textLight}
+        />
+        <RichEditor
+          ref={richTextRef}
+          initialContentHTML={content}
+          onChange={(text) => setContent(text)}
+          editorStyle={{
+            backgroundColor: colors.surface,
+            color: colors.text,
+            placeholderColor: colors.textLight,
+            contentCSSText: `font-family: System; font-size: 16px;`,
+          }}
+          placeholder="Write your note..."
+        />
+
         {images.length > 0 && (
-          <View style={styles.imagesSection}>
-            <Text style={styles.sectionLabel}>Images (drag to reorder)</Text>
+          <View style={{ marginTop: spacing[4] }}>
+            <Text style={{ fontSize: 12, fontWeight: '500', color: colors.textLight, marginBottom: spacing[2] }}>
+              Images (drag to reorder)
+            </Text>
             <DraggableFlatList
               data={images}
               keyExtractor={(item) => item.id}
@@ -113,35 +218,18 @@ export const AddScreen = ({ navigation, route }: any) => {
               onDragEnd={({ data }) => setImages(data.map((img, idx) => ({ ...img, order: idx })))}
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.imageList}
+              contentContainerStyle={{ paddingVertical: spacing[2] }}
             />
           </View>
         )}
-        <TouchableOpacity style={styles.addImageButton} onPress={handleAddImage}>
-          <Text style={styles.addImageText}>+ Add Image</Text>
+
+        <TouchableOpacity
+          style={{ marginTop: spacing[4], paddingVertical: spacing[3], alignItems: 'center', backgroundColor: colors.border, borderRadius: borderRadius.md }}
+          onPress={handleAddImage}
+        >
+          <Text style={{ fontSize: 16, color: colors.primary, fontWeight: '500' }}>+ Add Image</Text>
         </TouchableOpacity>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 };
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 60, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  cancel: { fontSize: 16, color: '#999' },
-  save: { fontSize: 16, color: '#007aff', fontWeight: '600' },
-  headerTitle: { fontSize: 17, fontWeight: '600' },
-  scroll: { flex: 1, padding: 20 },
-  titleInput: { fontSize: 24, fontWeight: '600', marginBottom: 16 },
-  bodyInput: { fontSize: 16, lineHeight: 24, minHeight: 200, textAlignVertical: 'top' },
-  imagesSection: { marginTop: 16 },
-  sectionLabel: { fontSize: 14, fontWeight: '500', marginBottom: 8, color: '#666' },
-  imageList: { paddingVertical: 8 },
-  imageItem: { marginRight: 12, position: 'relative' },
-  imageThumb: { width: 100, height: 100, borderRadius: 8 },
-  removeImageBtn: { position: 'absolute', top: -8, right: -8, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
-  removeText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
-  dragging: { opacity: 0.7 },
-  addImageButton: { marginTop: 16, paddingVertical: 12, alignItems: 'center', backgroundColor: '#f0f0f0', borderRadius: 8 },
-  addImageText: { fontSize: 16, color: '#007aff', fontWeight: '500' }
-});
