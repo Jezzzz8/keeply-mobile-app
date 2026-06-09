@@ -1,15 +1,16 @@
 // src/screens/SettingsScreen.tsx
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useEffect, useState } from 'react';
 import {
-    Alert,
-    ScrollView,
-    StyleSheet,
-    Switch,
-    Text,
-    TouchableOpacity,
-    View
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TouchableOpacity,
+  View
 } from 'react-native';
 import { DatabaseService } from '../database/DatabaseService';
 import { useTheme } from '../hooks/useTheme';
@@ -48,17 +49,27 @@ export const SettingsScreen = () => {
     const exportData = {
       exportDate: new Date().toISOString(),
       version: '1.0.0',
-      notes: notes
+      notes: notes,
     };
     const dataStr = JSON.stringify(exportData, null, 2);
-    
-    if (await Sharing.isAvailableAsync()) {
-      await Sharing.shareAsync(`data:application/json;base64,${btoa(dataStr)}`, {
-        mimeType: 'application/json',
-        dialogTitle: 'Export Keeply Data',
+    const exportFile = new FileSystem.File(FileSystem.Paths.cache, `keeply-export-${Date.now()}.json`);
+
+    try {
+      await exportFile.write(dataStr, {
+        encoding: FileSystem.EncodingType.UTF8,
       });
-    } else {
-      Alert.alert('Export not available', 'Sharing is not available on this device');
+
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(exportFile.uri, {
+          mimeType: 'application/json',
+          dialogTitle: 'Export Keeply Data',
+        });
+      } else {
+        Alert.alert('Export not available', 'Sharing is not available on this device');
+      }
+    } catch (error) {
+      console.warn('Failed to export data', error);
+      Alert.alert('Export failed', 'Unable to export data at this time.');
     }
   };
 
